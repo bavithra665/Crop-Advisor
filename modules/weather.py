@@ -44,8 +44,8 @@ class ClimateRiskEngine:
         flood_score = (hist_rainfall / 50) + (humidity * 0.3)
         
         return {
-            'drought_risk': min(100, round(drought_score, 1)),
-            'flood_risk': min(100, round(flood_score, 1)),
+            'drought_risk': min(100, round(drought_score)),
+            'flood_risk': min(100, round(flood_score)),
             'current_temp': temp,
             'current_humidity': humidity
         }

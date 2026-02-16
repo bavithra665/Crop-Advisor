@@ -334,10 +334,10 @@ def predictcrop():
                     crop.update(details)
                     crop['risk_adjusted_confidence'] = crop['confidence']
                 
-                # Calculate basic risk
+                # Calculate basic risk (rounded to whole numbers)
                 risk_data = {
-                    'drought_risk': max(0, min(100, (35 - temperature) * 3 + (100 - humidity) * 0.5)),
-                    'flood_risk': max(0, min(100, rainfall / 20 + humidity * 0.3)),
+                    'drought_risk': round(max(0, min(100, (35 - temperature) * 3 + (100 - humidity) * 0.5))),
+                    'flood_risk': round(max(0, min(100, rainfall / 20 + humidity * 0.3))),
                     'current_temp': temperature,
                     'current_humidity': humidity
                 }
