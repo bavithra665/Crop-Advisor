@@ -22,6 +22,11 @@ app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
+# ---------------- Health Check ----------------
+@app.route('/health')
+def health_check():
+    return "OK", 200
+
 # ---------------- Global Engine Holders ----------------
 _risk_engine = None
 _agri_bot = None
