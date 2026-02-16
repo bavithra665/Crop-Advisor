@@ -15,62 +15,76 @@ load_dotenv()
 
 class AgriBot:
     def __init__(self):
-        # 1. Try Groq (Best for Deployment)
+        # Configuration (Lightweight)
         self.groq_key = os.getenv("GROQ_API_KEY")
-        
-        # 2. Try Gemini (Backup for Cloud)
         self.gemini_key = os.getenv("GOOGLE_API_KEY")
-        if self.gemini_key:
-            genai.configure(api_key=self.gemini_key)
-            self.gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+        self.pc_api_key = os.getenv("PINECONE_API_KEY")
+        self.index_name = "agri-knowledge"
         
-        # 3. Local Ollama (Development Only)
         self.ollama_url = "http://localhost:11434/api/generate"
         self.ollama_model = "llama3.2"
         
-        # Initialize Embedding Model (might be slow on first load)
-        try:
-            self.embed_model = SentenceTransformer('all-MiniLM-L6-v2')
-            print("✅ Embedding model loaded")
-        except Exception as e:
-            print(f"⚠️ Embedding model failed: {e}")
-            self.embed_model = None
+        # Heavy models (Lazy loaded)
+        self.embed_model = None
+        self.pc = None
+        self.index = None
+        self.gemini_model = None
+        self.models_loaded = False
+
+    def _load_models(self):
+        if self.models_loaded: return
         
-        # Initialize Pinecone
-        pc_api_key = os.getenv("PINECONE_API_KEY")
-        if pc_api_key and self.embed_model:
+        print("⏳ Lazy loading AI models...")
+        
+        # 1. Load Embedding Model
+        if not self.embed_model:
             try:
-                self.pc = Pinecone(api_key=pc_api_key)
-                self.index_name = "agri-knowledge"
-                # Check if index exists - list_indexes() returns a list of index objects
+                self.embed_model = SentenceTransformer('all-MiniLM-L6-v2')
+                print("✅ Embedding model loaded")
+            except Exception as e:
+                print(f"⚠️ Embedding model failed: {e}")
+
+        # 2. Load Pinecone
+        if self.pc_api_key and self.embed_model and not self.index:
+            try:
+                self.pc = Pinecone(api_key=self.pc_api_key)
                 existing_indexes = [idx.name for idx in self.pc.list_indexes().indexes]
                 if self.index_name not in existing_indexes:
-                    self.pc.create_index(
-                        name=self.index_name,
-                        dimension=384,
-                        metric='cosine',
-                        spec=ServerlessSpec(cloud='aws', region='us-east-1')
-                    )
+                    try:
+                        self.pc.create_index(
+                            name=self.index_name,
+                            dimension=384,
+                            metric='cosine',
+                            spec=ServerlessSpec(cloud='aws', region='us-east-1')
+                        )
+                    except: pass # Ignore if creation fails/exists
                 self.index = self.pc.Index(self.index_name)
                 print("✅ Pinecone initialized")
             except Exception as e:
                 print(f"⚠️ Pinecone init error: {e}")
-                self.index = None
-        else:
-            self.index = None
-            print("⚠️ Pinecone skipped (no API key or embedding model)")
 
-        # Expert Offline Mode Data
-        self.offline_knowledge = {
-            "rice": "Rice requires high water (1000mm+) and clay soil. NPK 80:40:40 is standard.",
-            "wheat": "Wheat is a Rabi crop planted in Oct-Nov. Needs cool weather and NPK 120:60:40.",
-            "cotton": "Cotton needs sun and drip irrigation. High fertilizer needs (NPK 100:50:50).",
-            "pest": "For pests, use Neem oil or biological traps before using strong chemicals.",
-            "npk": "Nitrogen for leaves, Phosphorus for roots/fruit, Potassium for overall health."
-        }
+        # 3. Load Gemini
+        if self.gemini_key and not self.gemini_model:
+            try:
+                genai.configure(api_key=self.gemini_key)
+                self.gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+            except: pass
+            
+        self.models_loaded = True
 
     def search_context(self, query):
-        if not self.index: return ""
+        self._load_models() # Ensure models are loaded
+        if not self.index or not self.embed_model: return ""
+
+        try:
+            query_em = self.embed_model.encode(query).tolist()
+            results = self.index.query(vector=query_em, top_k=3, include_metadata=True)
+            return "\n".join([res['metadata']['text'] for res in results['matches']])
+        except: return ""
+
+    def get_answer(self, query, history=[]):
+        self._load_models() # Ensure models are loaded
+        context = self.search_context(query)
         try:
             query_em = self.embed_model.encode(query).tolist()
             results = self.index.query(vector=query_em, top_k=3, include_metadata=True)
