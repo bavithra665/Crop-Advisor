@@ -67,47 +67,38 @@ def get_analytics_engine():
 
 # ---------------- ML Model Getter ----------------
 _model_bundle = None
-_model_loading = False
-import threading
-model_lock = threading.Lock()
+_model_load_attempted = False
 
 def get_model_bundle():
-    global _model_bundle, _model_loading
+    global _model_bundle, _model_load_attempted
     
-    # If already loaded, return immediately
-    if _model_bundle is not None:
+    # If already loaded successfully, return it
+    if _model_bundle and isinstance(_model_bundle, dict) and 'model' in _model_bundle:
         return _model_bundle
+    
+    # If we already tried and failed, return empty dict (prevents retry loop)
+    if _model_load_attempted and not _model_bundle:
+        return {}
         
-    # If currently loading, return None to signal "warming up"
-    if _model_loading:
-        return None
-
-    # Thread-safe loading
-    with model_lock:
-        # Check again in case another thread finished while we waited
-        if _model_bundle is not None:
-            return _model_bundle
-            
-        _model_loading = True
-        try:
-            print("⏳ Starting ML Model Load...")
-            import joblib
-            model_path = os.path.join(os.path.dirname(__file__), 'models/crop_model.pkl')
-            
-            if not os.path.exists(model_path):
-                print(f"❌ ERROR: Model file not found at {model_path}")
-                _model_bundle = {} # prevent retry loop
-                return {}
-
-            _model_bundle = joblib.load(model_path)
-            print("✅ ML Model loaded successfully")
-        except Exception as e:
-            print(f"❌ CRITICAL: ML Model failed to load: {e}")
-            _model_bundle = {} # prevent retry loop
-        finally:
-            _model_loading = False
-            
-    return _model_bundle
+    # Try to load
+    _model_load_attempted = True
+    try:
+        print("⏳ Loading ML Model...")
+        import joblib
+        model_path = os.path.join(os.path.dirname(__file__), 'models/crop_model.pkl')
+        
+        if not os.path.exists(model_path):
+            print(f"❌ Model file not found: {model_path}")
+            return {}
+        
+        _model_bundle = joblib.load(model_path)
+        print("✅ ML Model loaded successfully")
+        return _model_bundle
+    except Exception as e:
+        print(f"❌ Model load failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return {}
 
 # ---------------- MongoDB Connection Getter ----------------
 _crop_collection = None
@@ -309,8 +300,8 @@ def predictcrop():
 
             # Load Model Bundle (Lazy)
             bundle = get_model_bundle()
-            if not bundle:
-                flash("AI Prediction system is warming up. Please try again in a few seconds.", "info")
+            if not bundle or 'model' not in bundle:
+                flash("ML Model is currently unavailable. Please contact support or try the chatbot instead.", "warning")
                 return redirect(url_for('predictcrop'))
 
             model = bundle.get('model')
@@ -318,6 +309,10 @@ def predictcrop():
             le_season = bundle.get('le_season')
             le_region = bundle.get('le_region')
             le_crop = bundle.get('le_crop')
+            
+            if not all([model, le_soil, le_season, le_region, le_crop]):
+                flash("ML Model components are incomplete. Please try again later.", "danger")
+                return redirect(url_for('predictcrop'))
 
             # Build Model Features
             soil_encoded = le_soil.transform([soil_type])[0]
