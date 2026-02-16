@@ -73,26 +73,27 @@ class AgriBot:
         self.models_loaded = True
 
     def search_context(self, query):
-        self._load_models() # Ensure models are loaded
-        if not self.index or not self.embed_model: return ""
-
+        """Search Pinecone for relevant context (optional enhancement)"""
+        if not self.index or not self.embed_model: 
+            return ""
         try:
             query_em = self.embed_model.encode(query).tolist()
             results = self.index.query(vector=query_em, top_k=3, include_metadata=True)
             return "\n".join([res['metadata']['text'] for res in results['matches']])
-        except: return ""
+        except: 
+            return ""
 
     def get_answer(self, query, history=[]):
-        self._load_models() # Ensure models are loaded
-        context = self.search_context(query)
-        try:
-            query_em = self.embed_model.encode(query).tolist()
-            results = self.index.query(vector=query_em, top_k=3, include_metadata=True)
-            return "\n".join([res['metadata']['text'] for res in results['matches']])
-        except: return ""
-
-    def get_answer(self, query, history=[]):
-        context = self.search_context(query)
+        # Try lightweight API-based answers first (no model loading needed)
+        context = ""
+        
+        # Only load models if we have the API keys (optional enhancement)
+        if self.pc_api_key:
+            try:
+                self._load_models()
+                context = self.search_context(query)
+            except:
+                pass  # Continue without RAG context
         
         # Requesting a more detailed, multi-paragraph explanation
         prompt = f"""
@@ -107,7 +108,7 @@ class AgriBot:
         Detailed, casual, and encouraging answer:
         """
         
-        # Priority 1: Groq (if key exists)
+        # Priority 1: Groq (if key exists) - FASTEST, NO MODEL NEEDED
         if self.groq_key and Groq:
             try:
                 client = Groq(api_key=self.groq_key)
@@ -116,23 +117,28 @@ class AgriBot:
                     messages=[{"role": "user", "content": prompt}]
                 )
                 return completion.choices[0].message.content
-            except: pass
+            except Exception as e:
+                print(f"⚠️ Groq failed: {e}")
 
         # Priority 2: Gemini (if key exists)
         if self.gemini_key:
             try:
+                if not self.gemini_model:
+                    self._load_models()
                 response = self.gemini_model.generate_content(prompt)
                 return response.text
-            except: pass
+            except Exception as e:
+                print(f"⚠️ Gemini failed: {e}")
 
         # Priority 3: Local Ollama (Local Dev Only)
         try:
             payload = {"model": self.ollama_model, "prompt": prompt, "stream": False}
-            print(f"DEBUG: Comparing with Local AI ({self.ollama_model})...")
+            print(f"DEBUG: Trying Local AI ({self.ollama_model})...")
             response = requests.post(self.ollama_url, json=payload, timeout=60)
             if response.status_code == 200: 
                 return response.json().get('response')
-        except: pass
+        except: 
+            pass
 
         # Ultimate Fallback: Detailed Manual Expert Mode
         q_lower = query.lower()
