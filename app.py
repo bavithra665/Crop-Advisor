@@ -2,16 +2,11 @@ from flask import Flask, render_template, request, redirect, url_for, session, f
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
-import joblib
-import numpy as np
 import os
-from pymongo import MongoClient
 from dotenv import load_dotenv
 
 # Import Custom Modules
-from modules.weather import ClimateRiskEngine
-from modules.chatbot import AgriBot, SEED_DATA
-from modules.analytics import AnalyticsEngine
+# (Moved into lazy getters to speed up startup)
 
 # Load environment variables
 load_dotenv()
@@ -36,6 +31,7 @@ def get_risk_engine():
     global _risk_engine
     if _risk_engine is None:
         try:
+            from modules.weather import ClimateRiskEngine
             _risk_engine = ClimateRiskEngine()
             print("✅ Climate Risk Engine initialized")
         except Exception as e:
@@ -46,6 +42,7 @@ def get_agri_bot():
     global _agri_bot
     if _agri_bot is None:
         try:
+            from modules.chatbot import AgriBot
             _agri_bot = AgriBot()
             print("✅ AgriBot initialized")
         except Exception as e:
@@ -56,6 +53,7 @@ def get_analytics_engine():
     global _analytics_engine
     if _analytics_engine is None:
         try:
+            from modules.analytics import AnalyticsEngine
             _analytics_engine = AnalyticsEngine()
             print("✅ Analytics Engine initialized")
         except Exception as e:
@@ -69,6 +67,7 @@ def get_model_bundle():
     global _model_bundle
     if _model_bundle is None:
         try:
+            import joblib
             model_path = os.path.join(os.path.dirname(__file__), 'models/crop_model.pkl')
             _model_bundle = joblib.load(model_path)
             print("✅ ML Model loaded successfully")
@@ -84,6 +83,7 @@ def get_crop_collection():
     global _crop_collection
     if _crop_collection is None:
         try:
+            from pymongo import MongoClient
             mongo_uri = os.environ.get('MONGODB_URI', "mongodb://localhost:27017")
             mongo_client = MongoClient(mongo_uri, serverSelectionTimeoutMS=2000)
             mongo_db = mongo_client["agri_predictor_db"]
@@ -140,8 +140,21 @@ class Feedback(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     user = db.relationship('User', backref='feedbacks')
 
-with app.app_context():
-    db.create_all()
+# Initialize DB on first request instead of startup
+@app.before_request
+def init_db():
+    if not hasattr(app, 'db_initialized'):
+        try:
+            db.create_all()
+            app.db_initialized = True
+            print("✅ Database initialized")
+        except Exception as e:
+            print(f"⚠️ Initial DB setup skipped or failed: {e}")
+
+# Import numpy where needed
+def get_numpy():
+    import numpy as np
+    return np
 
 # ---------------- Local Crop Details (fallback) ----------------
 crop_details = {
@@ -278,6 +291,7 @@ def predictcrop():
             season_encoded = le_season.transform([season])[0]
             region_encoded = le_region.transform([region])[0]
 
+            np = get_numpy()
             features = np.array([[n, p, k, temperature, humidity, ph, rainfall,
                                   soil_encoded, season_encoded, region_encoded]])
 

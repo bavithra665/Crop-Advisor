@@ -1,9 +1,7 @@
-"""
-WSGI entry point with better error handling
-"""
 import sys
 import traceback
 
+print("🚀 Gunicorn: Starting AgriPredictor-AI WSGI Server...")
 try:
     from app import app
     print("✅ Flask app imported successfully")
