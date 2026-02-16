@@ -62,31 +62,39 @@ def get_analytics_engine():
             print(f"⚠️ Analytics Engine failed: {e}")
     return _analytics_engine
 
-# ---------------- MongoDB Connection ----------------
-try:
-    mongo_uri = os.environ.get('MONGODB_URI', "mongodb://localhost:27017")
-    mongo_client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
-    mongo_db = mongo_client["agri_predictor_db"]
-    crop_collection = mongo_db["crops"]
-    print("✅ MongoDB connected!")
-except Exception as e:
-    print("⚠️ MongoDB connection error:", e)
-    crop_collection = None
+# ---------------- ML Model Getter ----------------
+_model_bundle = None
 
-# ---------------- ML Model ----------------
-try:
-    model_data = joblib.load('models/crop_model.pkl')
-    model = model_data['model']
-    le_soil = model_data['le_soil']
-    le_season = model_data['le_season']
-    le_region = model_data['le_region']
-    le_crop = model_data['le_crop']
-    crop_requirements = model_data['crop_requirements']
-    print("✅ ML Model loaded successfully")
-except Exception as e:
-    print(f"❌ CRITICAL: ML Model failed to load: {e}")
-    model = None
-    le_soil = le_season = le_region = le_crop = crop_requirements = None
+def get_model_bundle():
+    global _model_bundle
+    if _model_bundle is None:
+        try:
+            model_path = os.path.join(os.path.dirname(__file__), 'models/crop_model.pkl')
+            _model_bundle = joblib.load(model_path)
+            print("✅ ML Model loaded successfully")
+        except Exception as e:
+            print(f"❌ CRITICAL: ML Model failed to load: {e}")
+            _model_bundle = {}
+    return _model_bundle
+
+# ---------------- MongoDB Connection Getter ----------------
+_crop_collection = None
+
+def get_crop_collection():
+    global _crop_collection
+    if _crop_collection is None:
+        try:
+            mongo_uri = os.environ.get('MONGODB_URI', "mongodb://localhost:27017")
+            mongo_client = MongoClient(mongo_uri, serverSelectionTimeoutMS=2000)
+            mongo_db = mongo_client["agri_predictor_db"]
+            _crop_collection = mongo_db["crops"]
+            # Test connection
+            mongo_client.admin.command('ping')
+            print("✅ MongoDB connected!")
+        except Exception as e:
+            print("⚠️ MongoDB connection error:", e)
+            _crop_collection = None
+    return _crop_collection
 
 # ---------------- SQLAlchemy Models ----------------
 class User(db.Model):
@@ -253,6 +261,18 @@ def predictcrop():
             season = request.form.get('season')
             region = request.form.get('region')
 
+            # Load Model Bundle (Lazy)
+            bundle = get_model_bundle()
+            if not bundle:
+                flash("AI Prediction system is warming up. Please try again in a few seconds.", "info")
+                return redirect(url_for('predictcrop'))
+
+            model = bundle.get('model')
+            le_soil = bundle.get('le_soil')
+            le_season = bundle.get('le_season')
+            le_region = bundle.get('le_region')
+            le_crop = bundle.get('le_crop')
+
             # Build Model Features
             soil_encoded = le_soil.transform([soil_type])[0]
             season_encoded = le_season.transform([season])[0]
@@ -265,14 +285,16 @@ def predictcrop():
             top_3_indices = np.argsort(probabilities)[-3:][::-1]
 
             top_3_crops = []
+            crop_col = get_crop_collection()
+            
             for idx in top_3_indices:
                 crop_name = le_crop.inverse_transform([idx])[0]
                 confidence = round(probabilities[idx] * 100, 2)
 
                 # Fetch Details (Hybrid Mongo/Local)
                 mongo_crop = None
-                if crop_collection is not None:
-                    mongo_crop = crop_collection.find_one({"name": crop_name})
+                if crop_col is not None:
+                    mongo_crop = crop_col.find_one({"name": crop_name})
 
                 if mongo_crop:
                     details = {
@@ -338,9 +360,9 @@ def predictcrop():
                                    predictions=adjusted_crops,
                                    risk_data=risk_data,
                                    show_results=True,
-                                   soil_types=le_soil.classes_,
-                                   seasons=le_season.classes_,
-                                   regions=le_region.classes_)
+                                   soil_types=bundle['le_soil'].classes_,
+                                   seasons=bundle['le_season'].classes_,
+                                   regions=bundle['le_region'].classes_)
         except Exception as e:
             flash(f'Error: {str(e)}', 'danger')
             return redirect(url_for('predictcrop'))
@@ -352,6 +374,12 @@ def predictcrop():
     saved_risk_data = None
     show_saved = False
 
+    # Get model classes for dropdowns (Lazy)
+    bundle = get_model_bundle()
+    soil_classes = bundle['le_soil'].classes_ if bundle else []
+    season_classes = bundle['le_season'].classes_ if bundle else []
+    region_classes = bundle['le_region'].classes_ if bundle else []
+
     if last_pred:
         # Reconstruct crop objects for display
         saved_predictions = []
@@ -361,8 +389,9 @@ def predictcrop():
             
             # Fetch details again for display
             details = crop_details.get(c_name, {'image': 'default.jpg'})
-            if crop_collection is not None:
-                mongo_crop = crop_collection.find_one({"name": c_name})
+            crop_col = get_crop_collection()
+            if crop_col is not None:
+                mongo_crop = crop_col.find_one({"name": c_name})
                 if mongo_crop:
                      details = {
                         'planting': mongo_crop.get('planting', 'N/A'),
@@ -391,9 +420,9 @@ def predictcrop():
                            predictions=saved_predictions, 
                            risk_data=saved_risk_data,
                            show_results=show_saved,
-                           soil_types=le_soil.classes_,
-                           seasons=le_season.classes_,
-                           regions=le_region.classes_)
+                           soil_types=soil_classes,
+                           seasons=season_classes,
+                           regions=region_classes)
 
 # ----------------- New AI Assistant Route -----------------
 @app.route('/chatbot', methods=['GET', 'POST'])
