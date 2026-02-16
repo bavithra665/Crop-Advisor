@@ -389,10 +389,23 @@ def predictcrop():
     show_saved = False
 
     # Get model classes for dropdowns (Lazy)
+    # Get model classes for dropdowns (Lazy)
     bundle = get_model_bundle()
-    soil_classes = bundle['le_soil'].classes_ if bundle else []
-    season_classes = bundle['le_season'].classes_ if bundle else []
-    region_classes = bundle['le_region'].classes_ if bundle else []
+    if bundle and 'le_soil' in bundle:
+        try:
+            soil_classes = bundle['le_soil'].classes_.tolist()
+            season_classes = bundle['le_season'].classes_.tolist()
+            region_classes = bundle['le_region'].classes_.tolist()
+        except:
+             # Fallback if specific attributes are missing or numpy issues
+            soil_classes = ['Alluvial', 'Black', 'Clayey', 'Loamy', 'Red', 'Sandy']
+            season_classes = ['Kharif', 'Rabi', 'Zaid']
+            region_classes = ['North', 'South', 'East', 'West', 'Central']
+    else:
+        # Absolute fallback if bundle load fails
+        soil_classes = ['Alluvial', 'Black', 'Clayey', 'Loamy', 'Red', 'Sandy']
+        season_classes = ['Kharif', 'Rabi', 'Zaid']
+        region_classes = ['North', 'South', 'East', 'West', 'Central']
 
     if last_pred:
         # Reconstruct crop objects for display
