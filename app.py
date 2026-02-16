@@ -311,10 +311,61 @@ def predictcrop():
 
             # Load Model Bundle (Lazy)
             bundle = get_model_bundle()
+            
+            # FALLBACK: Use simple predictor if ML model unavailable
             if not bundle or 'model' not in bundle:
-                flash("ML Model is currently unavailable. Please contact support or try the chatbot instead.", "warning")
-                return redirect(url_for('predictcrop'))
+                print("⚠️ ML Model unavailable, using rule-based fallback")
+                from simple_predictor import predict_crops_simple
+                
+                top_3_crops = predict_crops_simple(
+                    n, p, k, temperature, humidity, ph, rainfall,
+                    soil_type, season, region
+                )
+                
+                # Add details for each crop
+                for crop in top_3_crops:
+                    details = crop_details.get(crop['name'], {
+                        'planting': 'Varies by region',
+                        'fertilizer': 'NPK as per soil test',
+                        'irrigation': 'Moderate',
+                        'yield': 'Varies',
+                        'image': 'default.jpg'
+                    })
+                    crop.update(details)
+                    crop['risk_adjusted_confidence'] = crop['confidence']
+                
+                # Calculate basic risk
+                risk_data = {
+                    'drought_risk': max(0, min(100, (35 - temperature) * 3 + (100 - humidity) * 0.5)),
+                    'flood_risk': max(0, min(100, rainfall / 20 + humidity * 0.3)),
+                    'current_temp': temperature,
+                    'current_humidity': humidity
+                }
+                
+                # Save prediction
+                new_pred = Prediction(
+                    user_id=session['user_id'], n=n, p=p, k=k,
+                    temperature=temperature, humidity=humidity, ph=ph,
+                    rainfall=rainfall, soil_type=soil_type,
+                    season=season, region=region,
+                    crop1=top_3_crops[0]['name'], confidence1=top_3_crops[0]['confidence'],
+                    crop2=top_3_crops[1]['name'], confidence2=top_3_crops[1]['confidence'],
+                    crop3=top_3_crops[2]['name'], confidence3=top_3_crops[2]['confidence'],
+                    drought_risk=risk_data['drought_risk'],
+                    flood_risk=risk_data['flood_risk']
+                )
+                db.session.add(new_pred)
+                db.session.commit()
+                
+                return render_template('predictcrop.html',
+                                       predictions=top_3_crops,
+                                       risk_data=risk_data,
+                                       show_results=True,
+                                       soil_types=soil_classes,
+                                       seasons=season_classes,
+                                       regions=region_classes)
 
+            # ORIGINAL ML MODEL PATH
             model = bundle.get('model')
             le_soil = bundle.get('le_soil')
             le_season = bundle.get('le_season')
